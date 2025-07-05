@@ -78,7 +78,7 @@ const authenticate = (req, res, next) => {
 };
 
 // Пример защищенного роута
-app.get('/profile', authenticate, async (req, res) => {
+app.get('/auth/profile', authenticate, async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
   res.json(rows[0]);
 });
