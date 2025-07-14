@@ -53,23 +53,26 @@ io.on('connection', (socket) => {
   socket.join(socket.userId);
   
   socket.on('send_message', async (data) => {
-    try {
-      const { receiverId, text } = data;
-      
-      const { rows } = await pool.query(
-        'INSERT INTO messages (sender_id, receiver_id, text) VALUES ($1, $2, $3) RETURNING *',
-        [socket.userId, receiverId, text]
-      );
-      
-      const message = rows[0];
-      
-      socket.emit('receive_message', message);
-      socket.to(receiverId).emit('receive_message', message);
-      
-    } catch (err) {
-      console.error('Ошибка отправки сообщения:', err);
-    }
-  });
+  console.log('Received send_message event:', data); 
+  try {
+    const { receiverId, text } = data;
+    
+    console.log('Inserting message to DB...'); 
+    const { rows } = await pool.query(
+      'INSERT INTO messages (sender_id, receiver_id, text) VALUES ($1, $2, $3) RETURNING *',
+      [socket.userId, receiverId, text]
+    );
+    console.log('Message inserted:', rows[0]); 
+    
+    const message = rows[0];
+    
+    socket.emit('receive_message', message);
+    socket.to(receiverId).emit('receive_message', message);
+    
+  } catch (err) {
+    console.error('Ошибка отправки сообщения:', err);
+  }
+});
   
   socket.on('disconnect', () => {
     console.log(`User disconnected: ${socket.userId}`);
