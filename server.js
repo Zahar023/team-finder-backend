@@ -123,7 +123,7 @@ const authenticate = (req, res, next) => {
 };
 
 app.get('/auth/profile', authenticate, async (req, res) => {
-  const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
+  const { rows } = await pool.query('SELECT id, email, name FROM users WHERE id = $1', [req.userId]);
   res.json(rows[0]);
 });
 
