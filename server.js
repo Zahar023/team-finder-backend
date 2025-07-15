@@ -86,34 +86,55 @@ app.get('/auth/profile', authenticate, async (req, res) => {
 
 // Получение или создание чата с пользователем
 app.post('/chats', authenticate, async (req, res) => {
-  const { partnerId } = req.body;
   try {
-    // Проверяем существование чата
-    const existingChat = await pool.query(
-      `SELECT id FROM chats 
-       WHERE (user1_id = $1 AND user2_id = $2)
-          OR (user1_id = $2 AND user2_id = $1)`,
-      [req.userId, partnerId]
-    );
-
-    if (existingChat.rows[0]) {
-      return res.json(existingChat.rows[0]);
+    const { partnerId } = req.body;
+    
+    // Проверка partnerId
+    const partnerIdNum = Number(partnerId);
+    if (isNaN(partnerIdNum)) {
+      return res.status(400).json({ error: 'Неверный ID партнера' });
     }
 
-    // Создаем новый чат (user1_id всегда меньший ID для уникальности)
-    const [user1, user2] = req.userId < partnerId 
-      ? [req.userId, partnerId] 
-      : [partnerId, req.userId];
+    // Проверяем существование чата
+    const existingChat = await pool.query(
+      `SELECT id, user1_id, user2_id, created_at FROM chats 
+       WHERE (user1_id = $1 AND user2_id = $2)
+          OR (user1_id = $2 AND user2_id = $1)`,
+      [req.userId, partnerIdNum]
+    );
+
+    // Если чат существует - возвращаем его
+    if (existingChat.rows[0]) {
+      const chat = existingChat.rows[0];
+      return res.json({
+        id: Number(chat.id),
+        user1_id: Number(chat.user1_id),
+        user2_id: Number(chat.user2_id),
+        created_at: chat.created_at
+      });
+    }
+
+    // Создаем новый чат (упорядочиваем ID для уникальности)
+    const [user1, user2] = req.userId < partnerIdNum 
+      ? [req.userId, partnerIdNum] 
+      : [partnerIdNum, req.userId];
 
     const { rows } = await pool.query(
       `INSERT INTO chats (user1_id, user2_id)
-       VALUES ($1, $2) RETURNING id`,
+       VALUES ($1, $2) 
+       RETURNING id, user1_id, user2_id, created_at`,
       [user1, user2]
     );
 
-    res.status(201).json(rows[0]);
+    const newChat = rows[0];
+    res.status(201).json({
+      id: Number(newChat.id),
+      user1_id: Number(newChat.user1_id),
+      user2_id: Number(newChat.user2_id),
+      created_at: newChat.created_at
+    });
   } catch (err) {
-    console.error(err);
+    console.error('Ошибка создания чата:', err);
     res.status(500).json({ error: 'Ошибка создания чата' });
   }
 });
