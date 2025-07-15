@@ -83,6 +83,107 @@ app.get('/auth/profile', authenticate, async (req, res) => {
   res.json(rows[0]);
 });
 
+
+// Получение или создание чата с пользователем
+app.post('/chats', authenticate, async (req, res) => {
+  const { partnerId } = req.body;
+  try {
+    // Проверяем существование чата
+    const existingChat = await pool.query(
+      `SELECT id FROM chats 
+       WHERE (user1_id = $1 AND user2_id = $2)
+          OR (user1_id = $2 AND user2_id = $1)`,
+      [req.userId, partnerId]
+    );
+
+    if (existingChat.rows[0]) {
+      return res.json(existingChat.rows[0]);
+    }
+
+    // Создаем новый чат (user1_id всегда меньший ID для уникальности)
+    const [user1, user2] = req.userId < partnerId 
+      ? [req.userId, partnerId] 
+      : [partnerId, req.userId];
+
+    const { rows } = await pool.query(
+      `INSERT INTO chats (user1_id, user2_id)
+       VALUES ($1, $2) RETURNING id`,
+      [user1, user2]
+    );
+
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Ошибка создания чата' });
+  }
+});
+
+// Получение сообщений чата
+app.get('/chats/:chatId/messages', authenticate, async (req, res) => {
+  try {
+    // Проверка доступа
+    const accessCheck = await pool.query(
+      `SELECT 1 FROM chats 
+       WHERE id = $1 AND (user1_id = $2 OR user2_id = $2)`,
+      [req.params.chatId, req.userId]
+    );
+    if (!accessCheck.rows[0]) return res.status(403).json({ error: 'Нет доступа к чату' });
+
+    const { rows } = await pool.query(
+      `SELECT m.*, u.name as sender_name
+       FROM messages m
+       JOIN users u ON m.sender_id = u.id
+       WHERE chat_id = $1
+       ORDER BY created_at`,
+      [req.params.chatId]
+    );
+
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Ошибка получения сообщений' });
+  }
+});
+
+// Отправка сообщения
+app.post('/chats/:chatId/messages', authenticate, async (req, res) => {
+  const { content } = req.body;
+  try {
+    // Проверка доступа
+    const accessCheck = await pool.query(
+      `SELECT 1 FROM chats 
+       WHERE id = $1 AND (user1_id = $2 OR user2_id = $2)`,
+      [req.params.chatId, req.userId]
+    );
+    if (!accessCheck.rows[0]) return res.status(403).json({ error: 'Нет доступа к чату' });
+
+    const { rows } = await pool.query(
+      `INSERT INTO messages (chat_id, sender_id, content)
+       VALUES ($1, $2, $3) RETURNING *`,
+      [req.params.chatId, req.userId, content]
+    );
+
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Ошибка отправки сообщения' });
+  }
+});
+
+// Получение списка пользователей
+app.get('/users', authenticate, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, name, email FROM users WHERE id != $1',
+      [req.userId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Ошибка получения пользователей' });
+  }
+});
+
 // Запуск сервера
 const PORT = process.env.PORT || 10000; 
 
