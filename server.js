@@ -177,7 +177,12 @@ app.get('/users', authenticate, async (req, res) => {
       'SELECT id, name, email FROM users WHERE id != $1',
       [req.userId]
     );
-    res.json(rows);
+    // Убедитесь, что id возвращается как число
+    res.json(rows.map(row => ({
+      id: Number(row.id),
+      name: row.name,
+      email: row.email
+    })));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Ошибка получения пользователей' });
