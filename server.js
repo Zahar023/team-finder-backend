@@ -53,23 +53,44 @@ io.on('connection', (socket) => {
   socket.join(socket.userId);
   
   socket.on('send_message', async (data) => {
-    try {
-      const { receiverId, text } = data;
-      
-      const { rows } = await pool.query(
-        'INSERT INTO messages (sender_id, receiver_id, text) VALUES ($1, $2, $3) RETURNING *',
-        [socket.userId, receiverId, text]
-      );
-      
-      const message = rows[0];
-      
-      socket.emit('receive_message', message);
-      socket.to(receiverId).emit('receive_message', message);
-      
-    } catch (err) {
-      console.error('Ошибка отправки сообщения:', err);
+  console.log('Received message data:', data);
+  
+  try {
+    // Проверяем обязательные поля
+    if (!data.receiverId || !data.text) {
+      throw new Error('Invalid message format');
     }
-  });
+
+    console.log('Inserting message to DB...');
+    const { rows } = await pool.query(
+      `INSERT INTO messages 
+       (sender_id, receiver_id, text, created_at) 
+       VALUES ($1, $2, $3, NOW()) 
+       RETURNING *`,
+      [socket.userId, data.receiverId, data.text]
+    );
+
+    const savedMessage = rows[0];
+    console.log('Message saved:', savedMessage);
+
+    // Отправляем подтверждение
+    const responseMessage = {
+      id: savedMessage.id,
+      sender_id: savedMessage.sender_id,
+      receiver_id: savedMessage.receiver_id,
+      text: savedMessage.text,
+      created_at: savedMessage.created_at
+    };
+
+    // Отправляем сообщение обоим участникам
+    socket.emit('receive_message', responseMessage);
+    socket.to(data.receiverId.toString()).emit('receive_message', responseMessage);
+    
+  } catch (err) {
+    console.error('Error saving message:', err);
+    socket.emit('message_error', { error: err.message });
+  }
+});
   
   socket.on('disconnect', () => {
     console.log(`User disconnected: ${socket.userId}`);
