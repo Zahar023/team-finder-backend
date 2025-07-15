@@ -4,17 +4,17 @@ const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
-const { Server } = require('socket.io');
-const http = require('http');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Debug: Проверка переменных окружения
 console.log('DATABASE_URL:', process.env.DATABASE_URL ? 'exists' : 'missing');
 console.log('JWT_SECRET:', process.env.JWT_SECRET ? 'exists' : 'missing');
 console.log('PORT:', process.env.PORT);
 
+// Подключение к PostgreSQL
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
@@ -22,83 +22,12 @@ const pool = new Pool({
   }
 });
 
+// Проверка подключения к БД
 pool.query('SELECT NOW()')
   .then(res => console.log('Подключено к PostgreSQL:', res.rows[0].now))
   .catch(err => console.error('Ошибка подключения к PostgreSQL:', err));
 
-const server = http.createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Authorization"],
-    credentials: true
-  }
-});
-
-io.use((socket, next) => {
-  const token = socket.handshake.auth.token;
-  if (!token) return next(new Error("Authentication error"));
-  
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    socket.userId = decoded.userId;
-    next();
-  } catch (err) {
-    next(new Error("Authentication error"));
-  }
-});
-
-io.on('connection', (socket) => {
-  console.log(`User connected: ${socket.userId}`);
-  
-  socket.join(socket.userId);
-  
-  socket.on('send_message', async (data) => {
-  console.log('Received message data:', data);
-  
-  try {
-    // Проверяем обязательные поля
-    if (!data.receiverId || !data.text) {
-      throw new Error('Invalid message format');
-    }
-
-    console.log('Inserting message to DB...');
-    const { rows } = await pool.query(
-      `INSERT INTO messages 
-       (sender_id, receiver_id, text, created_at) 
-       VALUES ($1, $2, $3, NOW()) 
-       RETURNING *`,
-      [socket.userId, data.receiverId, data.text]
-    );
-
-    const savedMessage = rows[0];
-    console.log('Message saved:', savedMessage);
-
-    // Отправляем подтверждение
-    const responseMessage = {
-      id: savedMessage.id,
-      sender_id: savedMessage.sender_id,
-      receiver_id: savedMessage.receiver_id,
-      text: savedMessage.text,
-      created_at: savedMessage.created_at
-    };
-
-    // Отправляем сообщение обоим участникам
-    socket.emit('receive_message', responseMessage);
-    socket.to(data.receiverId.toString()).emit('receive_message', responseMessage);
-    
-  } catch (err) {
-    console.error('Error saving message:', err);
-    socket.emit('message_error', { error: err.message });
-  }
-});
-  
-  socket.on('disconnect', () => {
-    console.log(`User disconnected: ${socket.userId}`);
-  });
-});
-
+// Регистрация пользователя
 app.post('/auth/register', async (req, res) => {
   const { email, password, name } = req.body;
   try {
@@ -118,12 +47,15 @@ app.post('/auth/register', async (req, res) => {
 app.post('/auth/login', async (req, res) => {
   const { email, password } = req.body;
   try {
+    // 1. Находим пользователя в БД
     const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     if (!rows[0]) return res.status(401).json({ error: 'Пользователь не найден' });
 
+    // 2. Проверяем пароль
     const isValid = await bcrypt.compare(password, rows[0].password_hash);
     if (!isValid) return res.status(401).json({ error: 'Неверный пароль' });
 
+    // 3. Генерируем токен
     const token = jwt.sign({ userId: rows[0].id }, process.env.JWT_SECRET);
     res.json({ token });
   } catch (err) {
@@ -133,57 +65,27 @@ app.post('/auth/login', async (req, res) => {
 });
 
 const authenticate = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
+  const token = req.headers.authorization?.split(' ')[1]; // "Bearer TOKEN"
   if (!token) return res.status(401).json({ error: 'Токен отсутствует' });
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.userId = decoded.userId;
+    req.userId = decoded.userId; // Добавляем ID пользователя в запрос
     next();
   } catch (err) {
     res.status(401).json({ error: 'Неверный токен' });
   }
 };
 
+// Пример защищенного роута
 app.get('/auth/profile', authenticate, async (req, res) => {
-  const { rows } = await pool.query('SELECT id, email, name FROM users WHERE id = $1', [req.userId]);
+  const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
   res.json(rows[0]);
 });
 
-app.get('/api/users', authenticate, async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      'SELECT id, name, email FROM users WHERE id != $1',
-      [req.userId]
-    );
-    res.json(rows);
-  } catch (err) {
-    console.error('Ошибка получения пользователей:', err);
-    res.status(500).json({ error: 'Ошибка получения пользователей' });
-  }
-});
+// Запуск сервера
+const PORT = process.env.PORT || 10000; 
 
-
-app.get('/api/messages/:userId', authenticate, async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { rows } = await pool.query(
-      `SELECT * FROM messages 
-       WHERE (sender_id = $1 AND receiver_id = $2) 
-       OR (sender_id = $2 AND receiver_id = $1) 
-       ORDER BY created_at`,
-      [req.userId, userId]
-    );
-    res.json(rows);
-  } catch (err) {
-    console.error('Ошибка получения сообщений:', err);
-    res.status(500).json({ error: 'Ошибка получения сообщений' });
-  }
-});
-
-
-const PORT = process.env.PORT || 10000;
-
-server.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Сервер запущен на порту ${PORT}`);
 });
